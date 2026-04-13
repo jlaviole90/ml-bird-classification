@@ -1,0 +1,23 @@
+postgres:
+  url: postgresql://${POSTGRES_USER:-bird}:${POSTGRES_PASSWORD:-bird_secret}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-birdcatalog}
+
+elasticsearch:
+  url: ${ELASTICSEARCH_URL:-http://localhost:9200}
+  index: bird-detections
+
+s3:
+  endpoint_url: ${S3_ENDPOINT_URL:-http://localhost:9000}
+  access_key: ${S3_ACCESS_KEY:-minioadmin}
+  secret_key: ${S3_SECRET_KEY:-minioadmin}
+  bucket: ${S3_BUCKET_RAW:-bird-raw-frames}
+  presigned_expiry_seconds: 3600
+
+kafka:
+  bootstrap_servers: ${KAFKA_BOOTSTRAP_SERVERS:-localhost:29092}
+  metadata_topic: ${KAFKA_METADATA_TOPIC:-enriched-metadata}
+  consumer_group: catalog-writer-group
+
+api:
+  host: 0.0.0.0
+  port: 8000
+  page_size: 50

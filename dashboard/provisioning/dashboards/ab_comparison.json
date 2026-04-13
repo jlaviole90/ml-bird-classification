@@ -1,0 +1,150 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "ab-comparison",
+    "title": "A/B Comparison — Birdify vs ML Pipeline",
+    "tags": ["bird-classification", "ab-test"],
+    "timezone": "browser",
+    "refresh": "1m",
+    "time": { "from": "now-7d", "to": "now" },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Version B — Inference Latency Over Time",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, rate(ts_inference_latency_microseconds_bucket[15m]))",
+            "legendFormat": "p50"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(ts_inference_latency_microseconds_bucket[15m]))",
+            "legendFormat": "p95"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "µs" }
+        }
+      },
+      {
+        "id": 2,
+        "title": "Version B — Pipeline Throughput (frames/sec)",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "rate(ts_inference_requests_total[15m])",
+            "legendFormat": "frames/sec processed"
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Species Detection Frequency — Top 10",
+        "type": "barchart",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+        "datasource": "PostgreSQL",
+        "targets": [
+          {
+            "rawSql": "SELECT s.common_name AS species, COUNT(*) AS detections FROM detections d JOIN species s ON d.species_id = s.id GROUP BY s.common_name ORDER BY detections DESC LIMIT 10;",
+            "format": "table"
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Confidence Distribution",
+        "type": "histogram",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+        "datasource": "PostgreSQL",
+        "targets": [
+          {
+            "rawSql": "SELECT confidence FROM detections WHERE detected_at >= NOW() - INTERVAL '7 days';",
+            "format": "table"
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Detection Heatmap — Hour x Day of Week",
+        "type": "heatmap",
+        "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+        "datasource": "PostgreSQL",
+        "targets": [
+          {
+            "rawSql": "SELECT EXTRACT(DOW FROM detected_at) AS day_of_week, EXTRACT(HOUR FROM detected_at) AS hour, COUNT(*) AS count FROM detections GROUP BY day_of_week, hour ORDER BY day_of_week, hour;",
+            "format": "table"
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "title": "Daily Species Diversity (Shannon Entropy)",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+        "datasource": "PostgreSQL",
+        "targets": [
+          {
+            "rawSql": "SELECT date, shannon_entropy FROM analytics_daily_diversity ORDER BY date;",
+            "format": "time_series"
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "title": "Daily Detection Count — Version B",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+        "datasource": "PostgreSQL",
+        "targets": [
+          {
+            "rawSql": "SELECT DATE_TRUNC('day', detected_at) AS time, COUNT(*) AS detections FROM detections GROUP BY time ORDER BY time;",
+            "format": "time_series"
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "title": "Resource Usage — CPU",
+        "description": "Requires node_exporter or cAdvisor for container metrics",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "rate(process_cpu_seconds_total{job=\"torchserve\"}[5m])",
+            "legendFormat": "TorchServe CPU"
+          },
+          {
+            "expr": "rate(process_cpu_seconds_total{job=\"fastapi\"}[5m])",
+            "legendFormat": "Catalog API CPU"
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "title": "Resource Usage — Memory",
+        "description": "Requires node_exporter or cAdvisor for container metrics",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "process_resident_memory_bytes{job=\"torchserve\"}",
+            "legendFormat": "TorchServe Memory"
+          },
+          {
+            "expr": "process_resident_memory_bytes{job=\"fastapi\"}",
+            "legendFormat": "Catalog API Memory"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "bytes" }
+        }
+      }
+    ]
+  }
+}

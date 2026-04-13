@@ -1,0 +1,134 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "pipeline-health",
+    "title": "Pipeline Health",
+    "tags": ["bird-classification", "pipeline"],
+    "timezone": "browser",
+    "refresh": "30s",
+    "time": { "from": "now-6h", "to": "now" },
+    "panels": [
+      {
+        "id": 1,
+        "title": "TorchServe — Inference Latency (p50/p95/p99)",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, rate(ts_inference_latency_microseconds_bucket[5m]))",
+            "legendFormat": "p50"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(ts_inference_latency_microseconds_bucket[5m]))",
+            "legendFormat": "p95"
+          },
+          {
+            "expr": "histogram_quantile(0.99, rate(ts_inference_latency_microseconds_bucket[5m]))",
+            "legendFormat": "p99"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "µs" }
+        }
+      },
+      {
+        "id": 2,
+        "title": "TorchServe — Requests/sec",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "rate(ts_inference_requests_total[5m])",
+            "legendFormat": "requests/sec"
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Catalog API — Request Rate",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "rate(http_requests_total[5m])",
+            "legendFormat": "{{ method }} {{ path }} {{ status }}"
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Catalog API — Latency (p95)",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "p95"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "s" }
+        }
+      },
+      {
+        "id": 5,
+        "title": "Detections — Total Count",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 6, "x": 0, "y": 16 },
+        "datasource": "PostgreSQL",
+        "targets": [
+          {
+            "rawSql": "SELECT COUNT(*) AS \"Total Detections\" FROM detections;",
+            "format": "table"
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "title": "Detections — Unique Species",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 6, "x": 6, "y": 16 },
+        "datasource": "PostgreSQL",
+        "targets": [
+          {
+            "rawSql": "SELECT COUNT(DISTINCT species_id) AS \"Species\" FROM detections;",
+            "format": "table"
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "title": "Detections — Average Confidence",
+        "type": "gauge",
+        "gridPos": { "h": 4, "w": 6, "x": 12, "y": 16 },
+        "datasource": "PostgreSQL",
+        "targets": [
+          {
+            "rawSql": "SELECT ROUND(AVG(confidence)::numeric, 4) AS \"Avg Confidence\" FROM detections;",
+            "format": "table"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "min": 0, "max": 1 }
+        }
+      },
+      {
+        "id": 8,
+        "title": "Detections — Today",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 6, "x": 18, "y": 16 },
+        "datasource": "PostgreSQL",
+        "targets": [
+          {
+            "rawSql": "SELECT COUNT(*) AS \"Today\" FROM detections WHERE detected_at >= CURRENT_DATE;",
+            "format": "table"
+          }
+        ]
+      }
+    ]
+  }
+}

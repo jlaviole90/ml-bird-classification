@@ -1,0 +1,21 @@
+kafka:
+  bootstrap_servers: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
+  raw_frames_topic: ${KAFKA_RAW_FRAMES_TOPIC:-raw-frames}
+  metadata_topic: ${KAFKA_METADATA_TOPIC:-enriched-metadata}
+  consumer_group: flink-inference-group
+
+torchserve:
+  inference_url: ${TORCHSERVE_INFERENCE_URL:-http://torchserve:8080}
+  model_name: bird_classifier
+  timeout_ms: 5000
+  batch_size: 4
+
+inference:
+  confidence_threshold: 0.7
+  dedup_window_seconds: 30
+
+validator:
+  url: ${VALIDATOR_URL:-http://catalog:8000}
+
+checkpoint:
+  interval_ms: 60000

@@ -1,0 +1,69 @@
+name: Deploy to AWS
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - prod
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  PROJECT: bird-classification
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push images
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          ECR_BASE="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+
+          for svc in catalog extractor; do
+            IMAGE="$ECR_BASE/$PROJECT-${{ inputs.environment }}/$svc:${{ github.sha }}"
+            case $svc in
+              catalog)   docker build -t "$IMAGE" -f catalog/Dockerfile . ;;
+              extractor) docker build -t "$IMAGE" -f pipeline/ingestion/Dockerfile . ;;
+            esac
+            docker push "$IMAGE"
+          done
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.0"
+
+      - name: Terraform apply
+        working-directory: infra/terraform
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          ECR_BASE="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+
+          terraform init
+          terraform apply \
+            -var-file="environments/${{ inputs.environment }}.tfvars" \
+            -var "catalog_image=$ECR_BASE/$PROJECT-${{ inputs.environment }}/catalog:${{ github.sha }}" \
+            -var "extractor_image=$ECR_BASE/$PROJECT-${{ inputs.environment }}/extractor:${{ github.sha }}" \
+            -auto-approve

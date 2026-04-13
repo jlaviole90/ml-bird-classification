@@ -1,0 +1,21 @@
+stream:
+  url: ${BIRDCAM_STREAM_URL:-http://localhost:8080/hls/stream.m3u8}
+
+extraction:
+  base_fps: 1.0
+  motion_fps: 3.0
+  motion_threshold: 30
+  jpeg_quality: 90
+  max_dimension: 1280
+
+kafka:
+  bootstrap_servers: ${KAFKA_BOOTSTRAP_SERVERS:-localhost:29092}
+  topic: ${KAFKA_RAW_FRAMES_TOPIC:-raw-frames}
+
+s3:
+  endpoint_url: ${S3_ENDPOINT_URL:-http://localhost:9000}
+  access_key: ${S3_ACCESS_KEY:-minioadmin}
+  secret_key: ${S3_SECRET_KEY:-minioadmin}
+  bucket: ${S3_BUCKET_RAW:-bird-raw-frames}
+
+source_id: birdcam-01

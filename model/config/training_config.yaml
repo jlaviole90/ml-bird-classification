@@ -1,0 +1,38 @@
+data:
+  root_dir: model/data/CUB_200_2011
+  num_classes: 200
+  image_size: 224
+  use_bounding_box: true
+
+model:
+  architecture: efficientnet_b4
+  pretrained: true
+  freeze_backbone_epochs: 5
+
+training:
+  epochs: 50
+  batch_size: 16
+  learning_rate: 0.001
+  weight_decay: 0.01
+  label_smoothing: 0.1
+  gradient_accumulation_steps: 2
+  early_stopping_patience: 7
+  num_workers: 4
+
+scheduler:
+  type: cosine_annealing
+  T_max: 50
+  eta_min: 0.000001
+
+checkpoint:
+  dir: model/checkpoints
+  save_best: true
+
+export:
+  onnx_path: model/exports/bird_classifier.onnx
+  torchscript_path: model/exports/bird_classifier.pt
+  mar_output_dir: serving/model_store
+
+logging:
+  tensorboard_dir: runs/bird_classifier
+  log_interval: 20
