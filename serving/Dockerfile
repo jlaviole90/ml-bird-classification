@@ -6,7 +6,7 @@ RUN apt-get update && \
 
 RUN pip install --no-cache-dir \
     torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
-    pip install --no-cache-dir torchserve torch-model-archiver Pillow
+    pip install --no-cache-dir torchserve torch-model-archiver Pillow pyyaml
 
 RUN useradd -m model-server
 USER model-server

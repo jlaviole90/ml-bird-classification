@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -150,17 +152,20 @@ def export(config_path: str) -> None:
 
     dummy = torch.randn(1, 3, data_cfg["image_size"], data_cfg["image_size"])
 
-    # ONNX
-    onnx_path = Path(export_cfg["onnx_path"])
-    onnx_path.parent.mkdir(parents=True, exist_ok=True)
-    torch.onnx.export(
-        model, dummy, str(onnx_path),
-        input_names=["image"],
-        output_names=["logits"],
-        dynamic_axes={"image": {0: "batch"}, "logits": {0: "batch"}},
-        opset_version=17,
-    )
-    print(f"ONNX exported → {onnx_path}")
+    # ONNX (optional — requires onnxscript)
+    try:
+        onnx_path = Path(export_cfg["onnx_path"])
+        onnx_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.onnx.export(
+            model, dummy, str(onnx_path),
+            input_names=["image"],
+            output_names=["logits"],
+            dynamic_axes={"image": {0: "batch"}, "logits": {0: "batch"}},
+            opset_version=17,
+        )
+        print(f"ONNX exported → {onnx_path}")
+    except Exception as e:
+        print(f"ONNX export skipped ({e}). TorchScript + .mar will still be created.")
 
     # TorchScript
     ts_path = Path(export_cfg["torchscript_path"])
@@ -189,8 +194,9 @@ def export(config_path: str) -> None:
         with open(codes_file, "w") as f:
             json.dump(idx_to_code, f)
 
+        archiver = shutil.which("torch-model-archiver") or str(Path(sys.executable).parent / "torch-model-archiver")
         cmd = [
-            "torch-model-archiver",
+            archiver,
             "--model-name", "bird_classifier",
             "--version", "1.0",
             "--serialized-file", str(ts_path),

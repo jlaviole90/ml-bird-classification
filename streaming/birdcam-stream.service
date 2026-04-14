@@ -1,0 +1,17 @@
+[Unit]
+Description=Birdcam RTSP-to-HLS transcoder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/birdcam/env
+ExecStart=/opt/birdcam/start_stream.sh
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=birdcam
+
+[Install]
+WantedBy=multi-user.target
