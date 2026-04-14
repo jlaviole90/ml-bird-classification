@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: bird
       POSTGRES_PASSWORD: bird_secret
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - /mnt/raid0/birdcam/postgres:/var/lib/postgresql/data
     ports:
       - "5430:5432"
     healthcheck:
@@ -27,8 +27,9 @@ services:
       - "8083:8081"
     volumes:
       - ./serving/model_store:/home/model-server/model-store
+      - /mnt/raid0/birdcam/logs/torchserve:/home/model-server/logs
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8081/ping || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/models || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -51,6 +52,8 @@ services:
       POSTGRES_HOST: postgres
       ELASTICSEARCH_URL: ""
       KAFKA_BOOTSTRAP_SERVERS: ""
+    volumes:
+      - /mnt/raid0/birdcam/logs/catalog:/app/logs
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
       interval: 5s
@@ -70,10 +73,9 @@ services:
         condition: service_healthy
     env_file:
       - .env
+    volumes:
+      - /mnt/raid0/birdcam/logs/worker:/app/logs
     environment:
       TORCHSERVE_URL: http://torchserve:8080
       CATALOG_URL: http://catalog:8000
     restart: unless-stopped
-
-volumes:
-  pgdata:

@@ -23,9 +23,20 @@ import httpx
 import numpy as np
 import yaml
 
+LOG_DIR = Path("/app/logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.handlers.RotatingFileHandler(
+            LOG_DIR / "inference.log",
+            maxBytes=50 * 1024 * 1024,
+            backupCount=10,
+        ),
+    ],
 )
 logger = logging.getLogger("inference-worker")
 
