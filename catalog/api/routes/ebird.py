@@ -280,7 +280,7 @@ async def get_audit_stats(db: AsyncSession = Depends(get_db)):
     )
 
 
-# ── Validate Endpoint (called by Flink) ────────────────
+# ── Validate Endpoint (called by inference worker / Flink) ─
 
 
 class ValidateRequest(BaseModel):
@@ -295,9 +295,8 @@ async def validate_detection(
     req: ValidateRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Validate a set of TorchServe predictions against eBird data.
-
-    Called by the Flink inference job before producing to enriched-metadata.
+    """Validate predictions against eBird data, persist the detection, and
+    update the yard life list.
     """
     preds = [
         Prediction(
@@ -318,9 +317,38 @@ async def validate_detection(
     )
 
     vr = await result
+
+    detection = DetectionORM(
+        confidence=vr.adjusted_confidence,
+        frame_s3_key="",
+        source_camera="birdcam-01",
+        detected_at=datetime.now(timezone.utc),
+        raw_confidence=vr.raw_confidence,
+        ebird_frequency=vr.ebird_frequency,
+        ebird_validated=vr.ebird_validated,
+        validation_notes=vr.validation_notes,
+        extra_metadata={
+            "frame_id": req.frame_id,
+            "species_code": vr.species_code,
+            "common_name": vr.common_name,
+            "was_rerouted": vr.was_rerouted,
+            "is_notable": vr.is_notable,
+            "top5": [
+                {"species": p.get("species", ""), "confidence": p.get("confidence", 0)}
+                for p in req.predictions[:5]
+            ],
+        },
+    )
+    db.add(detection)
+    await db.flush()
+
+    if vr.ebird_validated and vr.species_code:
+        await _update_yard_life_list(db, vr, detection)
+
     await db.commit()
 
     return {
+        "detection_id": str(detection.id),
         "species_code": vr.species_code,
         "common_name": vr.common_name,
         "raw_confidence": vr.raw_confidence,
@@ -332,3 +360,33 @@ async def validate_detection(
         "validation_notes": vr.validation_notes,
         "audit_id": str(vr.audit_id) if vr.audit_id else "",
     }
+
+
+async def _update_yard_life_list(
+    db: AsyncSession,
+    vr: Any,
+    detection: DetectionORM,
+) -> None:
+    """Insert or update the yard life list for a validated detection."""
+    result = await db.execute(
+        select(YardLifeListORM).where(YardLifeListORM.species_code == vr.species_code)
+    )
+    existing = result.scalar_one_or_none()
+    now = detection.detected_at
+
+    if existing:
+        existing.last_detected_at = now
+        existing.total_detections += 1
+        if vr.adjusted_confidence > (existing.best_confidence or 0):
+            existing.best_confidence = vr.adjusted_confidence
+    else:
+        entry = YardLifeListORM(
+            species_code=vr.species_code,
+            first_detected_at=now,
+            last_detected_at=now,
+            total_detections=1,
+            best_confidence=vr.adjusted_confidence,
+            best_frame_s3_key="",
+            ebird_confirmed=True,
+        )
+        db.add(entry)
