@@ -13,20 +13,20 @@ overridden with CLI flags or environment variables.
 
 Usage:
   # CLI: single image
-  python tools/e2e_test.py image path/to/bird.jpg
+  python tests/integration/e2e_test.py image path/to/bird.jpg
 
   # CLI: image with explicit region
-  python tools/e2e_test.py image path/to/bird.jpg --region US-NY-109
+  python tests/integration/e2e_test.py image path/to/bird.jpg --region US-NY-109
 
   # CLI: video (extracts frames at 1 fps)
-  python tools/e2e_test.py video path/to/bird.mp4
+  python tests/integration/e2e_test.py video path/to/bird.mp4
 
   # CLI: image against a running TorchServe instance
-  python tools/e2e_test.py image path/to/bird.jpg --torchserve http://localhost:8080
+  python tests/integration/e2e_test.py image path/to/bird.jpg --torchserve http://localhost:8080
 
   # Web UI
-  python tools/e2e_test.py web
-  python tools/e2e_test.py web --port 9090
+  python tests/integration/e2e_test.py web
+  python tests/integration/e2e_test.py web --port 9090
 
 Environment (set in .env or shell):
   EBIRD_API_KEY             — your eBird API key (never stored in code)

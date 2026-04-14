@@ -57,15 +57,16 @@ jobs:
     strategy:
       matrix:
         service:
-          - { name: catalog, dockerfile: catalog/Dockerfile }
-          - { name: serving, dockerfile: serving/Dockerfile }
-          - { name: extractor, dockerfile: pipeline/ingestion/Dockerfile }
+          - { name: catalog, context: ".", dockerfile: catalog/Dockerfile }
+          - { name: serving, context: "./serving", dockerfile: serving/Dockerfile }
+          - { name: extractor, context: ".", dockerfile: pipeline/ingestion/Dockerfile }
+          - { name: worker, context: ".", dockerfile: pipeline/worker/Dockerfile }
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ${{ matrix.service.context }}
           file: ${{ matrix.service.dockerfile }}
           push: false
           tags: bird-classification/${{ matrix.service.name }}:${{ github.sha }}

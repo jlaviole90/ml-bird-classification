@@ -1,6 +1,6 @@
 PYTHON ?= $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || command -v python3 || command -v python)
 
-.PHONY: help up down build logs train evaluate export serve ingest test lint e2e e2e-web e2e-up e2e-down
+.PHONY: help up down build logs download-data train evaluate export ingest test lint e2e e2e-web e2e-up e2e-down
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -64,7 +64,7 @@ e2e-down: ## Stop e2e services
 	docker compose stop $(E2E_SERVICES)
 
 e2e: e2e-up ## Full e2e test (no mocks): make e2e E2E_IMAGE=bird.jpg
-	$(PYTHON) tools/e2e_test.py image $(E2E_IMAGE) --live
+	$(PYTHON) tests/integration/e2e_test.py image $(E2E_IMAGE) --live
 
 e2e-web: e2e-up ## E2E web UI against live services
-	$(PYTHON) tools/e2e_test.py web --live
+	$(PYTHON) tests/integration/e2e_test.py web --live

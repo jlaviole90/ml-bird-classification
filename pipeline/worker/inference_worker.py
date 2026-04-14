@@ -23,6 +23,8 @@ import httpx
 import numpy as np
 import yaml
 
+from logging.handlers import RotatingFileHandler
+
 LOG_DIR = Path("/app/logs")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -31,7 +33,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.handlers.RotatingFileHandler(
+        RotatingFileHandler(
             LOG_DIR / "inference.log",
             maxBytes=50 * 1024 * 1024,
             backupCount=10,
