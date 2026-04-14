@@ -94,8 +94,35 @@ sudo tailscale funnel --bg 8080
 This produces a URL like `https://<pi-name>.<tailnet>.ts.net/`. Verify it works:
 
 ```bash
+# HLS stream
 curl -s https://<pi-name>.<tailnet>.ts.net/stream.m3u8
+
+# Catalog API (proxied through Nginx)
+curl -s https://<pi-name>.<tailnet>.ts.net/api/v1/yard-list
 ```
+
+The Nginx config proxies `/api/*` requests to the catalog API on port 8000. This means a single Tailscale Funnel instance exposes both the live HLS stream and the full detection API.
+
+After updating the Nginx config, reload it:
+
+```bash
+sudo cp streaming/nginx-hls.conf /etc/nginx/sites-available/hls
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+### Available API paths through Funnel
+
+| Path | Description |
+|------|-------------|
+| `/stream.m3u8` | Live HLS stream |
+| `/api/v1/yard-list` | Yard life list |
+| `/api/v1/detections` | Paginated detections |
+| `/api/v1/detections/{id}/video?fps=3` | Detection video clip (MP4) |
+| `/api/v1/detections/{id}/frames` | Frame metadata for a detection |
+| `/api/v1/detections/{id}/frames/{fid}/image` | Single JPEG frame |
+| `/api/v1/analytics/summary` | Dashboard statistics |
+| `/api/v1/search?q=...` | Search detections |
+| `/health` | Service health check |
 
 ## 7. Update Vercel
 
@@ -105,7 +132,7 @@ Set `BIRDCAM_STREAM_URL` in the Vercel dashboard to:
 https://<pi-name>.<tailnet>.ts.net/stream.m3u8
 ```
 
-No code changes needed in jlav.io. The existing passphrase gate and hls.js player work as-is.
+The catalog API is also available at `https://<pi-name>.<tailnet>.ts.net/api/v1/...` for fetching detection data, videos, and yard list information from your site.
 
 ## 8. Deploy the ML classification pipeline (Docker)
 

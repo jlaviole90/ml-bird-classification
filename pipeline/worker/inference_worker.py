@@ -3,10 +3,15 @@
 Runs as a long-lived process. On motion detection, sends frames to TorchServe
 for species classification and forwards predictions to the Catalog API for
 eBird validation and storage.
+
+When a bird is detected, enters a recording session that captures every frame
+during the cooldown period. Recording continues as long as new detections keep
+occurring, and stops once the cooldown expires without a detection.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -160,6 +165,106 @@ def _crop_with_padding(
     return frame[y1:y2, x1:x2]
 
 
+class FrameRecorder:
+    """Buffers JPEG frames during a detection session and flushes them to the catalog.
+
+    A recording session starts when a bird is detected. Frames are captured
+    continuously during the cooldown period. Each new detection resets the
+    cooldown timer and may start a new session (flushing the old one first).
+    When the cooldown expires, the remaining frames are flushed.
+    """
+
+    MAX_BUFFER_SIZE = 200
+
+    def __init__(self, catalog_url: str, client: httpx.Client, jpeg_quality: int = 90):
+        self._catalog_url = catalog_url
+        self._client = client
+        self._jpeg_quality = jpeg_quality
+
+        self._detection_id: str | None = None
+        self._buffer: list[dict] = []
+        self._sequence: int = 0
+
+    @property
+    def active(self) -> bool:
+        return self._detection_id is not None
+
+    @property
+    def detection_id(self) -> str | None:
+        return self._detection_id
+
+    def start_session(self, detection_id: str) -> None:
+        """Begin a new recording session, flushing any existing one first."""
+        if self._detection_id and self._buffer:
+            self._flush()
+        self._detection_id = detection_id
+        self._buffer = []
+        self._sequence = 0
+        logger.info("Frame recording started for detection %s", detection_id[:8])
+
+    def record_frame(self, frame: np.ndarray, has_bird: bool = False) -> None:
+        """Add a frame to the buffer."""
+        if not self._detection_id:
+            return
+
+        _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self._jpeg_quality])
+        h, w = frame.shape[:2]
+
+        self._buffer.append({
+            "sequence_number": self._sequence,
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "has_bird": has_bird,
+            "jpeg_b64": base64.b64encode(buf.tobytes()).decode("ascii"),
+            "frame_width": w,
+            "frame_height": h,
+        })
+        self._sequence += 1
+
+        if len(self._buffer) >= self.MAX_BUFFER_SIZE:
+            self._flush()
+
+    def stop_session(self) -> None:
+        """End the current session and flush remaining frames."""
+        if self._detection_id and self._buffer:
+            self._flush()
+        if self._detection_id:
+            logger.info(
+                "Frame recording stopped for detection %s (%d frames total)",
+                self._detection_id[:8], self._sequence,
+            )
+        self._detection_id = None
+        self._buffer = []
+        self._sequence = 0
+
+    def _flush(self) -> None:
+        """Send buffered frames to the catalog API."""
+        if not self._detection_id or not self._buffer:
+            return
+
+        url = f"{self._catalog_url}/api/v1/detections/{self._detection_id}/frames"
+        payload = {
+            "detection_id": self._detection_id,
+            "frames": self._buffer,
+        }
+
+        try:
+            resp = self._client.post(url, json=payload, timeout=60.0)
+            resp.raise_for_status()
+            result = resp.json()
+            logger.debug(
+                "Flushed %d frames for detection %s",
+                result.get("frames_inserted", len(self._buffer)),
+                self._detection_id[:8],
+            )
+        except Exception:
+            logger.exception(
+                "Failed to flush %d frames for detection %s",
+                len(self._buffer), self._detection_id[:8],
+            )
+
+        self._buffer = []
+
+
 class InferenceWorker:
     def __init__(self, cfg: dict[str, Any]):
         self.rtsp_url = cfg["stream"]["url"]
@@ -194,6 +299,7 @@ class InferenceWorker:
             min_contour_area=int(motion_cfg.get("min_contour_area", 500)),
         )
         self.client = httpx.Client(timeout=30.0)
+        self.recorder = FrameRecorder(self.catalog_url, self.client, self.jpeg_quality)
 
         self._running = True
         signal.signal(signal.SIGINT, self._stop)
@@ -273,6 +379,7 @@ class InferenceWorker:
         logger.info("  Cooldown: %.1fs between inferences", self.cooldown)
         logger.info("  Min confidence: %.0f%%", self.min_confidence * 100)
         logger.info("  Bird pre-filter: %s", "YOLO enabled" if self.bird_detector else "disabled")
+        logger.info("  Frame recording: enabled (captures during cooldown)")
 
         width, height = self._probe_resolution()
         frame_size = width * height * 3
@@ -288,6 +395,7 @@ class InferenceWorker:
             raw = proc.stdout.read(frame_size)
             if len(raw) < frame_size:
                 logger.warning("Stream read error — reconnecting in 5s")
+                self.recorder.stop_session()
                 proc.terminate()
                 proc.wait()
                 time.sleep(5)
@@ -304,14 +412,32 @@ class InferenceWorker:
             frame = np.frombuffer(raw, dtype=np.uint8).reshape((height, width, 3))
             has_motion = self.motion.detect(frame)
 
-            current_interval = (1.0 / self.motion_fps) if has_motion else interval
+            # During an active recording session, always capture at motion_fps
+            if self.recorder.active:
+                current_interval = 1.0 / self.motion_fps
+            else:
+                current_interval = (1.0 / self.motion_fps) if has_motion else interval
+
             if now - last_capture < current_interval:
                 continue
             last_capture = now
 
+            # If recording is active but cooldown has expired, stop the session
+            if self.recorder.active and (now - self._last_inference >= self.cooldown):
+                self.recorder.stop_session()
+
+            # If recording is active, always capture the frame (even without motion)
+            if self.recorder.active:
+                bird_in_frame = False
+                if self.bird_detector:
+                    boxes = self.bird_detector.detect(frame)
+                    bird_in_frame = len(boxes) > 0
+                self.recorder.record_frame(frame, has_bird=bird_in_frame)
+
             if not has_motion:
                 continue
 
+            # Cooldown check for inference (not for recording)
             if now - self._last_inference < self.cooldown:
                 continue
 
@@ -352,10 +478,15 @@ class InferenceWorker:
                 confidence = validated.get("adjusted_confidence", 0)
                 status = "validated" if validated.get("ebird_validated") else "unvalidated"
                 rerouted = validated.get("was_rerouted", False)
+                detection_id = validated.get("detection_id", "")
+
+                # Start (or restart) frame recording for this detection
+                self.recorder.start_session(detection_id)
+                self.recorder.record_frame(frame, has_bird=True)
 
                 reroute_tag = " [REROUTED]" if rerouted else ""
                 logger.info(
-                    "Detection #%d | %s (%.1f%%) | %s%s | %.0fms | %s",
+                    "Detection #%d | %s (%.1f%%) | %s%s | %.0fms | %s | recording",
                     detections + 1, species, confidence * 100,
                     status, reroute_tag, inference_ms, frame_id[:8],
                 )
@@ -372,6 +503,7 @@ class InferenceWorker:
                     logger.error("Too many consecutive errors — exiting for restart")
                     break
 
+        self.recorder.stop_session()
         proc.terminate()
         proc.wait()
         self.client.close()
