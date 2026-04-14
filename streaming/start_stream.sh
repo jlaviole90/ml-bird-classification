@@ -4,8 +4,8 @@ set -euo pipefail
 # ── Configuration (override via environment) ─────────────────────────────────
 RTSP_URL="${REOLINK_RTSP_URL:?Set REOLINK_RTSP_URL e.g. rtsp://admin:pass@192.168.1.21:554//h264Preview_01_main}"
 HLS_DIR="${HLS_DIR:-/var/www/hls}"
-HLS_SEGMENT_SEC="${HLS_SEGMENT_SEC:-2}"
-HLS_LIST_SIZE="${HLS_LIST_SIZE:-5}"
+HLS_SEGMENT_SEC="${HLS_SEGMENT_SEC:-4}"
+HLS_LIST_SIZE="${HLS_LIST_SIZE:-10}"
 
 # H.265 cameras need re-encoding for browser HLS playback.
 # Set to "copy" if the camera is configured to output H.264.
