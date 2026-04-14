@@ -5,10 +5,13 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir \
+    torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir \
     opencv-python-headless \
     httpx \
     numpy \
-    pyyaml
+    pyyaml \
+    ultralytics
 
 WORKDIR /app
 COPY pipeline/worker/ pipeline/worker/

@@ -6,6 +6,21 @@ stream:
   jpeg_quality: 90
   max_dimension: 1280
 
+motion:
+  min_area_fraction: 0.005
+  max_area_fraction: 0.6
+  min_contour_area: 500
+  cooldown_seconds: 5.0
+
+inference:
+  min_confidence: 0.10
+
+bird_detector:
+  enabled: true
+  model: yolov8n.pt
+  confidence: 0.4
+  padding_fraction: 0.15
+
 torchserve:
   url: ${TORCHSERVE_URL:-http://torchserve:8080}
   model_name: bird_classifier

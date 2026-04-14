@@ -66,11 +66,24 @@ def load_config(path: str | Path = "pipeline/worker/config.yaml") -> dict[str, A
 
 
 class MotionDetector:
-    """Detect motion between consecutive frames using absolute pixel difference."""
+    """Detect localised, bird-sized motion between consecutive frames.
 
-    def __init__(self, threshold: int = 30, min_area_fraction: float = 0.005):
+    Rejects:
+    - Scattered pixel noise (wind in leaves, lighting shifts) via contour filtering
+    - Whole-frame changes (camera adjusting exposure) via max_area_fraction
+    """
+
+    def __init__(
+        self,
+        threshold: int = 30,
+        min_area_fraction: float = 0.005,
+        max_area_fraction: float = 0.6,
+        min_contour_area: int = 500,
+    ):
         self.threshold = threshold
         self.min_area_fraction = min_area_fraction
+        self.max_area_fraction = max_area_fraction
+        self.min_contour_area = min_contour_area
         self._prev_gray: np.ndarray | None = None
 
     def detect(self, frame: np.ndarray) -> bool:
@@ -85,8 +98,66 @@ class MotionDetector:
         self._prev_gray = gray
 
         _, thresh = cv2.threshold(delta, self.threshold, 255, cv2.THRESH_BINARY)
+        thresh = cv2.dilate(thresh, None, iterations=2)
+
         motion_fraction = np.count_nonzero(thresh) / thresh.size
-        return motion_fraction > self.min_area_fraction
+
+        if motion_fraction < self.min_area_fraction:
+            return False
+        if motion_fraction > self.max_area_fraction:
+            return False
+
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        significant = [c for c in contours if cv2.contourArea(c) >= self.min_contour_area]
+
+        return len(significant) > 0
+
+
+class BirdDetector:
+    """Pre-filter using YOLOv8-nano to confirm a bird is in the frame.
+
+    Only the COCO "bird" class (ID 14) is detected. Returns bounding boxes
+    so the worker can crop to the bird region before species classification.
+    """
+
+    BIRD_CLASS_ID = 14
+
+    def __init__(self, model_name: str = "yolov8n.pt", confidence: float = 0.4):
+        from ultralytics import YOLO
+        logger.info("Loading YOLO model: %s (conf=%.2f)", model_name, confidence)
+        self.model = YOLO(model_name)
+        self.confidence = confidence
+
+    def detect(self, frame: np.ndarray) -> list[tuple[int, int, int, int]]:
+        results = self.model(
+            frame,
+            classes=[self.BIRD_CLASS_ID],
+            conf=self.confidence,
+            verbose=False,
+        )
+        boxes = []
+        for r in results:
+            for box in r.boxes.xyxy.cpu().numpy().astype(int):
+                boxes.append((int(box[0]), int(box[1]), int(box[2]), int(box[3])))
+        return boxes
+
+
+def _crop_with_padding(
+    frame: np.ndarray,
+    box: tuple[int, int, int, int],
+    padding: float = 0.15,
+) -> np.ndarray:
+    """Crop frame to bounding box with proportional padding on each side."""
+    h, w = frame.shape[:2]
+    x1, y1, x2, y2 = box
+    bw, bh = x2 - x1, y2 - y1
+    pad_x = int(bw * padding)
+    pad_y = int(bh * padding)
+    x1 = max(0, x1 - pad_x)
+    y1 = max(0, y1 - pad_y)
+    x2 = min(w, x2 + pad_x)
+    y2 = min(h, y2 + pad_y)
+    return frame[y1:y2, x1:x2]
 
 
 class InferenceWorker:
@@ -102,8 +173,25 @@ class InferenceWorker:
         self.catalog_url = cfg["catalog"]["url"]
         self.ebird_region = cfg["catalog"]["ebird_region"]
 
+        motion_cfg = cfg.get("motion", {})
+        self.cooldown = float(motion_cfg.get("cooldown_seconds", 5.0))
+        self.min_confidence = float(cfg.get("inference", {}).get("min_confidence", 0.10))
+
+        bird_cfg = cfg.get("bird_detector", {})
+        self.bird_detector_enabled = bool(bird_cfg.get("enabled", True))
+        self.bird_padding = float(bird_cfg.get("padding_fraction", 0.15))
+        self.bird_detector: BirdDetector | None = None
+        if self.bird_detector_enabled:
+            self.bird_detector = BirdDetector(
+                model_name=bird_cfg.get("model", "yolov8n.pt"),
+                confidence=float(bird_cfg.get("confidence", 0.4)),
+            )
+
         self.motion = MotionDetector(
             threshold=int(cfg["stream"]["motion_threshold"]),
+            min_area_fraction=float(motion_cfg.get("min_area_fraction", 0.005)),
+            max_area_fraction=float(motion_cfg.get("max_area_fraction", 0.6)),
+            min_contour_area=int(motion_cfg.get("min_contour_area", 500)),
         )
         self.client = httpx.Client(timeout=30.0)
 
@@ -113,6 +201,7 @@ class InferenceWorker:
 
         self._consecutive_errors = 0
         self._max_errors = 20
+        self._last_inference = 0.0
 
     def _stop(self, *_: Any) -> None:
         logger.info("Shutdown signal received")
@@ -181,6 +270,9 @@ class InferenceWorker:
         logger.info("  TorchServe: %s", self.torchserve_url)
         logger.info("  Catalog: %s", self.catalog_url)
         logger.info("  Region: %s", self.ebird_region)
+        logger.info("  Cooldown: %.1fs between inferences", self.cooldown)
+        logger.info("  Min confidence: %.0f%%", self.min_confidence * 100)
+        logger.info("  Bird pre-filter: %s", "YOLO enabled" if self.bird_detector else "disabled")
 
         width, height = self._probe_resolution()
         frame_size = width * height * 3
@@ -203,6 +295,8 @@ class InferenceWorker:
                 self.motion = MotionDetector(
                     threshold=self.motion.threshold,
                     min_area_fraction=self.motion.min_area_fraction,
+                    max_area_fraction=self.motion.max_area_fraction,
+                    min_contour_area=self.motion.min_contour_area,
                 )
                 continue
 
@@ -218,15 +312,39 @@ class InferenceWorker:
             if not has_motion:
                 continue
 
+            if now - self._last_inference < self.cooldown:
+                continue
+
             frames_processed += 1
             frame_id = str(uuid.uuid4())
-            ts = datetime.now(timezone.utc).isoformat()
 
             try:
-                jpeg = self._encode_jpeg(frame)
+                classify_frame = frame
+                if self.bird_detector:
+                    boxes = self.bird_detector.detect(frame)
+                    if not boxes:
+                        logger.debug("YOLO: no bird in frame — skipping")
+                        continue
+                    largest = max(boxes, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
+                    classify_frame = _crop_with_padding(frame, largest, self.bird_padding)
+                    logger.debug(
+                        "YOLO: bird at (%d,%d)-(%d,%d), crop %dx%d",
+                        *largest, classify_frame.shape[1], classify_frame.shape[0],
+                    )
+
+                jpeg = self._encode_jpeg(classify_frame)
                 t0 = time.perf_counter()
                 predictions = self._classify(jpeg)
                 inference_ms = (time.perf_counter() - t0) * 1000
+                self._last_inference = time.time()
+
+                top_confidence = predictions[0]["confidence"] if predictions else 0
+                if top_confidence < self.min_confidence:
+                    logger.debug(
+                        "Skipped — top confidence %.1f%% below threshold %.0f%%",
+                        top_confidence * 100, self.min_confidence * 100,
+                    )
+                    continue
 
                 validated = self._validate(predictions, frame_id)
 
