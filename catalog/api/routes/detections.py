@@ -109,6 +109,10 @@ async def create_detection(body: DetectionCreate, db: AsyncSession = Depends(get
 # ── Detection Frames ─────────────────────────────────────
 
 
+MAX_FRAMES_PER_BATCH = 200
+MAX_JPEG_B64_LENGTH = 2_000_000  # ~1.5MB decoded JPEG
+
+
 class FrameUpload(BaseModel):
     sequence_number: int
     captured_at: datetime
@@ -130,12 +134,17 @@ async def upload_frames(
     db: AsyncSession = Depends(get_db),
 ):
     """Upload a batch of JPEG frames for a detection session."""
+    if len(body.frames) > MAX_FRAMES_PER_BATCH:
+        raise HTTPException(status_code=400, detail=f"Max {MAX_FRAMES_PER_BATCH} frames per batch")
+
     detection = await db.get(DetectionORM, detection_id)
     if not detection:
         raise HTTPException(status_code=404, detail="Detection not found")
 
     inserted = 0
     for f in body.frames:
+        if len(f.jpeg_b64) > MAX_JPEG_B64_LENGTH:
+            raise HTTPException(status_code=400, detail=f"Frame {f.sequence_number} exceeds max size")
         jpeg_data = base64.b64decode(f.jpeg_b64)
         frame_orm = DetectionFrameORM(
             detection_id=detection_id,

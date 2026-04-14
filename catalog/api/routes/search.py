@@ -20,7 +20,8 @@ async def search_detections(
     db: AsyncSession = Depends(get_db),
 ):
     """Search detections by species name, validation notes, or metadata."""
-    like = f"%{q}%"
+    escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    like = f"%{escaped}%"
     filters = or_(
         DetectionORM.validation_notes.ilike(like),
         cast(DetectionORM.extra_metadata, String).ilike(like),

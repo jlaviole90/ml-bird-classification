@@ -5,12 +5,13 @@
 
 All API paths are prefixed with `/api/v1` unless noted otherwise. Responses are JSON unless the endpoint returns binary data (images, video).
 
-CORS is enabled (`Access-Control-Allow-Origin: *`) through the Nginx proxy.
+CORS is restricted to `https://jlav.io` through the Nginx proxy.
 
 ---
 
 ## Table of Contents
 
+- [Security](#security)
 - [System](#system)
 - [Dashboard & Analytics](#dashboard--analytics)
 - [Detections](#detections)
@@ -21,6 +22,27 @@ CORS is enabled (`Access-Control-Allow-Origin: *`) through the Nginx proxy.
 - [Search](#search)
 - [Audit Log](#audit-log)
 - [Live Stream](#live-stream)
+
+---
+
+## Security
+
+The public API (via Tailscale Funnel) is **read-only**. All protections are enforced at the Nginx reverse proxy layer.
+
+| Protection | Implementation |
+|------------|---------------|
+| **Write methods blocked** | `limit_except GET HEAD OPTIONS { deny all; }` -- POST/PUT/DELETE/PATCH return `403` |
+| **CORS** | `Access-Control-Allow-Origin: https://jlav.io` -- only your site can make cross-origin requests |
+| **Swagger/ReDoc hidden** | `/docs`, `/redoc`, `/openapi.json` return `404` through the proxy |
+| **Metrics hidden** | `/metrics` returns `404` through the proxy |
+| **Video rate limited** | 2 requests/minute per IP with burst of 3 (returns `429` when exceeded) |
+| **Request body size** | `client_max_body_size 1k` on the API proxy -- effectively blocks upload attempts |
+| **Frame upload limits** | Server-side: max 200 frames/batch, max ~1.5MB per frame |
+| **Search wildcards** | ILIKE `%` and `_` characters are escaped to prevent full-table scans |
+
+Internal services (inference worker, TorchServe) communicate directly on port 8000 over the Docker network and are not affected by these restrictions.
+
+To access Swagger UI, `/metrics`, or POST endpoints, connect directly to `http://localhost:8000` on the Pi.
 
 ---
 
@@ -838,9 +860,10 @@ for (const d of dets.items) {
 
 ## OpenAPI / Swagger
 
-FastAPI auto-generates interactive docs:
+FastAPI auto-generates interactive docs. These are **blocked from public access** through the Nginx proxy and only available locally on the Pi:
 
-- **Swagger UI:** `https://<pi-name>.ts.net/api/docs` (or `http://localhost:8000/docs`)
-- **ReDoc:** `https://<pi-name>.ts.net/api/redoc` (or `http://localhost:8000/redoc`)
+- **Swagger UI:** `http://localhost:8000/docs`
+- **ReDoc:** `http://localhost:8000/redoc`
+- **OpenAPI JSON:** `http://localhost:8000/openapi.json`
 
-> **Note:** The Swagger/ReDoc URLs go through the Nginx proxy. If they don't render, access them directly at `http://localhost:8000/docs` on the Pi.
+Accessing `/docs`, `/redoc`, or `/openapi.json` through the Tailscale Funnel URL will return `404`.

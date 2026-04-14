@@ -101,7 +101,9 @@ curl -s https://<pi-name>.<tailnet>.ts.net/stream.m3u8
 curl -s https://<pi-name>.<tailnet>.ts.net/api/v1/yard-list
 ```
 
-The Nginx config proxies `/api/*` requests to the catalog API on port 8000. This means a single Tailscale Funnel instance exposes both the live HLS stream and the full detection API.
+The Nginx config proxies `/api/*` requests to the catalog API on port 8000. This means a single Tailscale Funnel instance exposes both the live HLS stream and the read-only detection API.
+
+**Security:** The proxy only allows GET/HEAD/OPTIONS methods. POST endpoints (used by the inference worker) are blocked from public access. CORS is restricted to `https://jlav.io`. Swagger UI, metrics, and the OpenAPI schema are hidden. Video requests are rate-limited to 2/min per IP.
 
 After updating the Nginx config, reload it:
 
@@ -110,19 +112,21 @@ sudo cp streaming/nginx-hls.conf /etc/nginx/sites-available/hls
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-### Available API paths through Funnel
+### Available API paths through Funnel (read-only)
 
 | Path | Description |
 |------|-------------|
 | `/stream.m3u8` | Live HLS stream |
 | `/api/v1/yard-list` | Yard life list |
 | `/api/v1/detections` | Paginated detections |
-| `/api/v1/detections/{id}/video?fps=3` | Detection video clip (MP4) |
+| `/api/v1/detections/{id}/video?fps=3` | Detection video clip (MP4, rate-limited) |
 | `/api/v1/detections/{id}/frames` | Frame metadata for a detection |
 | `/api/v1/detections/{id}/frames/{fid}/image` | Single JPEG frame |
 | `/api/v1/analytics/summary` | Dashboard statistics |
 | `/api/v1/search?q=...` | Search detections |
 | `/health` | Service health check |
+
+Blocked paths: `/docs`, `/redoc`, `/openapi.json`, `/metrics`, all POST/PUT/DELETE.
 
 ## 7. Update Vercel
 
