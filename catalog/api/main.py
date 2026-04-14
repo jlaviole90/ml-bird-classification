@@ -123,7 +123,11 @@ async def health():
 
 def _start_catalog_writer() -> None:
     """Consume from the enriched-metadata Kafka topic and insert into DB + Elasticsearch."""
-    bootstrap = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:29092")
+    bootstrap = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "")
+    if not bootstrap:
+        logger.info("KAFKA_BOOTSTRAP_SERVERS not set — skipping catalog writer")
+        return
+
     topic = os.environ.get("KAFKA_METADATA_TOPIC", "enriched-metadata")
     es_url = os.environ.get("ELASTICSEARCH_URL", "http://localhost:9200")
 

@@ -1,0 +1,76 @@
+services:
+  # ── Database ──────────────────────────────────────────
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_DB: birdcatalog
+      POSTGRES_USER: bird
+      POSTGRES_PASSWORD: bird_secret
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bird -d birdcatalog"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # ── Model Serving ─────────────────────────────────────
+  torchserve:
+    build:
+      context: ./serving
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ── Catalog API (eBird validation + storage) ──────────
+  catalog:
+    build:
+      context: .
+      dockerfile: catalog/Dockerfile
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      ELASTICSEARCH_URL: ""
+      KAFKA_BOOTSTRAP_SERVERS: ""
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    restart: unless-stopped
+
+  # ── Inference Worker ──────────────────────────────────
+  worker:
+    build:
+      context: .
+      dockerfile: pipeline/worker/Dockerfile
+    depends_on:
+      torchserve:
+        condition: service_healthy
+      catalog:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      TORCHSERVE_URL: http://torchserve:8080
+      CATALOG_URL: http://catalog:8000
+    restart: unless-stopped
+
+volumes:
+  pgdata:

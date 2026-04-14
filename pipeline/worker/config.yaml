@@ -1,0 +1,15 @@
+stream:
+  url: ${REOLINK_RTSP_URL:-rtsp://admin:pass@192.168.1.21:554//h264Preview_01_main}
+  base_fps: 1.0
+  motion_fps: 3.0
+  motion_threshold: 30
+  jpeg_quality: 90
+  max_dimension: 1280
+
+torchserve:
+  url: ${TORCHSERVE_URL:-http://torchserve:8080}
+  model_name: bird_classifier
+
+catalog:
+  url: ${CATALOG_URL:-http://catalog:8000}
+  ebird_region: ${EBIRD_REGION:-US-WI}

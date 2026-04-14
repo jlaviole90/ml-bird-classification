@@ -107,6 +107,65 @@ https://<pi-name>.<tailnet>.ts.net/stream.m3u8
 
 No code changes needed in jlav.io. The existing passphrase gate and hls.js player work as-is.
 
+## 8. Deploy the ML classification pipeline (Docker)
+
+The inference worker, TorchServe, Catalog API, and PostgreSQL run as Docker containers on the Pi alongside the HLS streaming service.
+
+### Install Docker on the Pi
+
+```bash
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER
+# Log out and back in, then verify:
+docker --version
+```
+
+### Clone the repo and configure
+
+```bash
+cd ~/ml-bird-classification
+cp .env.example .env
+# Edit .env with your actual values:
+#   REOLINK_RTSP_URL=rtsp://admin:YOUR_PASSWORD@192.168.1.21:554//h264Preview_01_main
+#   EBIRD_API_KEY=your_key_here
+#   EBIRD_REGION=US-WI
+```
+
+### Build and start the pipeline
+
+```bash
+docker compose -f docker-compose.pi.yml up -d --build
+```
+
+### Verify services
+
+```bash
+# Check all containers are running
+docker compose -f docker-compose.pi.yml ps
+
+# TorchServe health
+curl http://localhost:8080/ping
+
+# Catalog API health
+curl http://localhost:8000/health
+
+# Watch worker logs for detections
+docker compose -f docker-compose.pi.yml logs -f worker
+```
+
+### Manage the pipeline
+
+```bash
+# Stop all services
+docker compose -f docker-compose.pi.yml down
+
+# Restart just the worker
+docker compose -f docker-compose.pi.yml restart worker
+
+# View recent logs
+docker compose -f docker-compose.pi.yml logs --tail=100 worker
+```
+
 ## Troubleshooting
 
 **Stream not connecting**: Verify the camera is reachable (`ping 192.168.1.21`) and RTSP is enabled. Test with `ffplay` from the Pi.
