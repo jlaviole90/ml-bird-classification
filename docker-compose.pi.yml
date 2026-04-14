@@ -25,6 +25,8 @@ services:
     ports:
       - "8080:8080"
       - "8081:8081"
+    volumes:
+      - ./serving/model_store:/home/model-server/model-store
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/ping || exit 1"]
       interval: 10s
