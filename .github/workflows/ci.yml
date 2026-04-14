@@ -59,7 +59,6 @@ jobs:
         service:
           - { name: catalog, context: ".", dockerfile: catalog/Dockerfile }
           - { name: serving, context: "./serving", dockerfile: serving/Dockerfile }
-          - { name: extractor, context: ".", dockerfile: pipeline/ingestion/Dockerfile }
           - { name: worker, context: ".", dockerfile: pipeline/worker/Dockerfile }
     steps:
       - uses: actions/checkout@v4

@@ -50,8 +50,6 @@ services:
       - .env
     environment:
       POSTGRES_HOST: postgres
-      ELASTICSEARCH_URL: ""
-      KAFKA_BOOTSTRAP_SERVERS: ""
     volumes:
       - /mnt/raid0/birdcam/logs/catalog:/app/logs
     healthcheck:

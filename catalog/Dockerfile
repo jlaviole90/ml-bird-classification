@@ -11,9 +11,6 @@ RUN pip install --no-cache-dir \
     asyncpg \
     psycopg2-binary \
     alembic \
-    elasticsearch \
-    confluent-kafka \
-    boto3 \
     prometheus-client \
     pydantic-settings \
     httpx \

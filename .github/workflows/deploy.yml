@@ -41,11 +41,12 @@ jobs:
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           ECR_BASE="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
 
-          for svc in catalog extractor; do
+          for svc in catalog serving worker; do
             IMAGE="$ECR_BASE/$PROJECT-${{ inputs.environment }}/$svc:${{ github.sha }}"
             case $svc in
-              catalog)   docker build -t "$IMAGE" -f catalog/Dockerfile . ;;
-              extractor) docker build -t "$IMAGE" -f pipeline/ingestion/Dockerfile . ;;
+              catalog) docker build -t "$IMAGE" -f catalog/Dockerfile . ;;
+              serving) docker build -t "$IMAGE" -f serving/Dockerfile ./serving ;;
+              worker)  docker build -t "$IMAGE" -f pipeline/worker/Dockerfile . ;;
             esac
             docker push "$IMAGE"
           done
@@ -65,5 +66,6 @@ jobs:
           terraform apply \
             -var-file="environments/${{ inputs.environment }}.tfvars" \
             -var "catalog_image=$ECR_BASE/$PROJECT-${{ inputs.environment }}/catalog:${{ github.sha }}" \
-            -var "extractor_image=$ECR_BASE/$PROJECT-${{ inputs.environment }}/extractor:${{ github.sha }}" \
+            -var "serving_image=$ECR_BASE/$PROJECT-${{ inputs.environment }}/serving:${{ github.sha }}" \
+            -var "worker_image=$ECR_BASE/$PROJECT-${{ inputs.environment }}/worker:${{ github.sha }}" \
             -auto-approve

@@ -1,57 +1,5 @@
 services:
-  # ── Message Bus ────────────────────────────────────────
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.6.0
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-    ports:
-      - "2181:2181"
-
-  kafka:
-    image: confluentinc/cp-kafka:7.6.0
-    depends_on:
-      - zookeeper
-    ports:
-      - "9092:9092"
-      - "29092:29092"
-    environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-
-  # ── Object Storage ────────────────────────────────────
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    volumes:
-      - minio-data:/data
-
-  minio-init:
-    image: minio/mc:latest
-    depends_on:
-      - minio
-    entrypoint: >
-      /bin/sh -c "
-      sleep 5;
-      mc alias set local http://minio:9000 minioadmin minioadmin;
-      mc mb --ignore-existing local/bird-raw-frames;
-      mc mb --ignore-existing local/bird-training-data;
-      mc mb --ignore-existing local/bird-model-artifacts;
-      exit 0;
-      "
-
-  # ── Databases ─────────────────────────────────────────
+  # ── Database ──────────────────────────────────────────
   postgres:
     image: timescale/timescaledb:latest-pg16
     ports:
@@ -68,21 +16,22 @@ services:
       timeout: 3s
       retries: 10
 
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+  # ── Model Serving ─────────────────────────────────────
+  torchserve:
+    build:
+      context: ./serving
+      dockerfile: Dockerfile
     ports:
-      - "9200:9200"
-    environment:
-      discovery.type: single-node
-      xpack.security.enabled: "false"
-      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+      - "8080:8080"
+      - "8081:8081"
     volumes:
-      - es-data:/usr/share/elasticsearch/data
+      - ./serving/model_store:/home/model-server/model-store
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/models || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 12
+      retries: 20
+      start_period: 30s
 
   # ── Catalog API ──────────────────────────────────────
   catalog:
@@ -94,96 +43,32 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      elasticsearch:
-        condition: service_healthy
-      kafka:
-        condition: service_started
     env_file:
       - .env
     environment:
       POSTGRES_HOST: postgres
-      ELASTICSEARCH_URL: http://elasticsearch:9200
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 15
 
-  # ── Model Serving ─────────────────────────────────────
-  torchserve:
+  # ── Inference Worker ──────────────────────────────────
+  worker:
     build:
-      context: ./serving
-      dockerfile: Dockerfile
-    ports:
-      - "8080:8080"
-      - "8081:8081"
-      - "8082:8082"
-    volumes:
-      - ./serving/model_store:/home/model-server/model-store
-    healthcheck:
-      test: ["CMD-SHELL", "curl -so /dev/null -w '%{http_code}' http://localhost:8080/ping | grep -q '[0-9]'"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
-      start_period: 30s
-
-  # ── Stream Processing — Flink ─────────────────────────
-  flink-jobmanager:
-    build:
-      context: ./pipeline/flink
-      dockerfile: Dockerfile
-    command: jobmanager
-    ports:
-      - "8083:8081"
-    environment:
-      FLINK_PROPERTIES: |
-        jobmanager.rpc.address: flink-jobmanager
-        state.checkpoints.dir: s3://bird-raw-frames/flink-checkpoints
-        s3.endpoint: http://minio:9000
-        s3.path-style-access: true
-        s3.access-key: minioadmin
-        s3.secret-key: minioadmin
-
-  flink-taskmanager:
-    build:
-      context: ./pipeline/flink
-      dockerfile: Dockerfile
-    command: taskmanager
+      context: .
+      dockerfile: pipeline/worker/Dockerfile
     depends_on:
-      - flink-jobmanager
+      torchserve:
+        condition: service_healthy
+      catalog:
+        condition: service_healthy
+    env_file:
+      - .env
     environment:
-      FLINK_PROPERTIES: |
-        jobmanager.rpc.address: flink-jobmanager
-        taskmanager.numberOfTaskSlots: 2
-        state.checkpoints.dir: s3://bird-raw-frames/flink-checkpoints
-        s3.endpoint: http://minio:9000
-        s3.path-style-access: true
-        s3.access-key: minioadmin
-        s3.secret-key: minioadmin
-
-  # ── Observability ─────────────────────────────────────
-  prometheus:
-    image: prom/prometheus:v2.51.0
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./dashboard/prometheus.yml:/etc/prometheus/prometheus.yml
-
-  grafana:
-    image: grafana/grafana:10.4.1
-    ports:
-      - "3000:3000"
-    environment:
-      GF_SECURITY_ADMIN_PASSWORD: admin
-    volumes:
-      - ./dashboard/provisioning:/etc/grafana/provisioning
-      - grafana-data:/var/lib/grafana
-    depends_on:
-      - prometheus
+      TORCHSERVE_URL: http://torchserve:8080
+      CATALOG_URL: http://catalog:8000
+    restart: unless-stopped
 
 volumes:
-  minio-data:
   postgres-data:
-  es-data:
-  grafana-data:

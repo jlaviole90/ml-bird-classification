@@ -19,18 +19,58 @@ Reolink RLC-811A (PoE, 4K)
                                       |-- 6. Store detection + update yard life list (PostgreSQL)
 ```
 
-### Pi 5 Deployment (4 containers)
+## Deployment Modes
 
-| Container | Role | Port (host) |
-|-----------|------|-------------|
-| **postgres** | TimescaleDB -- detections, eBird data, yard life list | 5430 |
-| **torchserve** | Serves the EfficientNet-B4 `.mar` model | 8082 |
-| **catalog** | FastAPI -- eBird validation, detection storage, REST API | 8000 |
-| **worker** | Inference loop -- RTSP frames, YOLO, TorchServe, Catalog | -- |
+The project supports two deployment targets with the same core services but different infrastructure.
 
-### Full Development Stack (additional services)
+### Local / Raspberry Pi (current, production)
 
-The `docker-compose.yml` includes the full distributed architecture for local development and future AWS deployment: Kafka, Flink, Spark, MinIO, Elasticsearch, Prometheus, and Grafana.
+Runs four containers via `docker-compose.pi.yml`. The inference worker pulls RTSP frames directly, processes them in-process with YOLO and motion detection, and calls TorchServe and the Catalog API over HTTP. All data lives in PostgreSQL. No message bus, no object storage, no search index.
+
+| Component | Technology |
+|-----------|-----------|
+| Compute | Raspberry Pi 5 (ARM64) |
+| Database | PostgreSQL + TimescaleDB |
+| Model Serving | TorchServe (CPU, EfficientNet-B4) |
+| Bird Detection | YOLOv8-nano (COCO pre-trained) |
+| Species Validation | eBird API 2.0, Bayesian re-weighting |
+| API | FastAPI, SQLAlchemy (async), Pydantic |
+| Search | PostgreSQL full-text search |
+| Streaming | FFmpeg, Nginx, HLS, Tailscale Funnel |
+| Camera | Reolink RLC-811A (PoE, 4K, RTSP) |
+| Orchestration | Docker Compose (4 containers) |
+| Logging | Rotating file logs on RAID0 |
+
+```bash
+docker compose -f docker-compose.pi.yml up -d --build
+```
+
+### AWS Cloud (future, infrastructure defined)
+
+Terraform modules in `infra/terraform/` define the full cloud stack. The same catalog and serving images are deployed to ECS Fargate. Kinesis replaces the direct RTSP pull, S3 stores frames, and SageMaker serves the model at scale.
+
+| Component | Technology |
+|-----------|-----------|
+| Compute | ECS Fargate |
+| Database | RDS PostgreSQL |
+| Model Serving | SageMaker Endpoint |
+| Stream Ingestion | Kinesis Data Streams |
+| Object Storage | S3 |
+| CI/CD | GitHub Actions (`deploy.yml`) |
+| Infrastructure | Terraform |
+
+```bash
+# Triggered via GitHub Actions workflow_dispatch
+gh workflow run deploy.yml -f environment=dev
+```
+
+### Local Development
+
+`docker-compose.yml` mirrors the Pi compose structure (postgres, torchserve, catalog, worker) but with default ports for local development on any machine.
+
+```bash
+docker compose up -d --build
+```
 
 ## Inference Pipeline
 
@@ -65,24 +105,14 @@ The Catalog API integrates with [eBird API 2.0](https://documenter.getpostman.co
 ### Train and Export the Model
 
 ```bash
-# Create virtual environment
 python3 -m venv .venv && source .venv/bin/activate
-
-# Install dependencies
 pip install -e ".[dev]"
-
-# Copy environment config
 cp .env.example .env
 # Edit .env with your eBird API key and camera credentials
 
-# Download CUB-200-2011 dataset (~1.2GB)
-make download-data
-
-# Train the bird classifier
-make train
-
-# Export to TorchServe .mar archive
-make export
+make download-data   # CUB-200-2011 dataset (~1.2GB)
+make train           # Train the bird classifier
+make export          # Export to TorchServe .mar archive
 ```
 
 ### Deploy on Raspberry Pi 5
@@ -103,9 +133,9 @@ curl http://localhost:8000/api/v1/yard-list | python3 -m json.tool
 ### Run Tests
 
 ```bash
-make test                # Unit tests with coverage
-make e2e-web             # E2E web UI against live services
-make e2e E2E_IMAGE=bird.jpg  # Single image E2E test
+make test                        # Unit tests with coverage
+make e2e-web                     # E2E web UI against live services
+make e2e E2E_IMAGE=bird.jpg      # Single image E2E test
 ```
 
 ## API Endpoints
@@ -118,6 +148,10 @@ The Catalog API (port 8000) exposes these endpoints:
 | `/api/v1/validate` | POST | Validate predictions against eBird and store detection |
 | `/api/v1/yard-list` | GET | Cumulative yard life list |
 | `/api/v1/yard-list/stats` | GET | Yard list summary (total species, coverage) |
+| `/api/v1/detections` | GET | Paginated detection list with filters |
+| `/api/v1/detections/{id}` | GET | Single detection detail |
+| `/api/v1/search?q=...` | GET | Full-text search across detections |
+| `/api/v1/analytics/summary` | GET | Dashboard statistics (totals, averages, today's count) |
 | `/api/v1/ebird/local-species` | GET | Local species list with current-week frequency |
 | `/api/v1/ebird/notable` | GET | Recent notable (rare) sightings |
 | `/api/v1/ebird/hotspots` | GET | Nearby birding hotspots |
@@ -125,6 +159,7 @@ The Catalog API (port 8000) exposes these endpoints:
 | `/api/v1/audit/rerouted` | GET | Detections where eBird overrode the model |
 | `/api/v1/audit/stats` | GET | Aggregate audit metrics (reroute rate, rejection rate) |
 | `/api/v1/species/{id}/migration` | GET | Detection timeline overlaid with eBird seasonal frequency |
+| `/metrics` | GET | Prometheus metrics |
 
 ## Project Layout
 
@@ -153,13 +188,10 @@ catalog/                  FastAPI metadata catalog
   Dockerfile              Catalog API image
 
 pipeline/
-  worker/                 Inference worker for Pi deployment
+  worker/                 Inference worker
     inference_worker.py   RTSP -> motion -> YOLO -> TorchServe -> Catalog loop
     config.yaml           Worker configuration (all values env-overridable)
     Dockerfile            Worker image (Python + FFmpeg + OpenCV + YOLO)
-  ingestion/              Frame extractor (Kafka-based, for full stack)
-  flink/                  PyFlink real-time inference job (for full stack)
-  spark/                  PySpark batch analytics (for full stack)
 
 streaming/                Raspberry Pi streaming setup
   start_stream.sh         FFmpeg RTSP-to-HLS transcoder with auto-reconnect
@@ -167,21 +199,17 @@ streaming/                Raspberry Pi streaming setup
   birdcam-stream.service  systemd unit file
   README.md               Full Pi setup guide
 
-dashboard/                Observability and sightings UI
-  prometheus.yml          Prometheus scrape config
-  provisioning/           Grafana dashboards and datasources
-  sightings/              Angular sightings dashboard components for jlav.io
-
 tests/
   unit/                   Unit tests (pytest) for all modules
   integration/            E2E testing tool (CLI + web UI)
 
-infra/                    AWS infrastructure (Terraform)
-  terraform/              ECS, Kinesis, Lambda, S3, SageMaker modules
+infra/
+  terraform/              AWS infrastructure (ECS, Kinesis, S3, SageMaker, Lambda)
 
-docker-compose.yml        Full local development stack (14 services)
-docker-compose.pi.yml     Lightweight Pi deployment (4 services)
+docker-compose.yml        Local development stack (4 services)
+docker-compose.pi.yml     Raspberry Pi deployment (4 services, Pi-specific paths)
 Makefile                  Common development tasks
+pyproject.toml            Python dependencies and tool configuration
 ```
 
 ## Configuration
@@ -202,8 +230,11 @@ All worker configuration lives in `pipeline/worker/config.yaml` with environment
 
 ```
 make help            Show all targets
-make up              Start full local stack (docker-compose.yml)
+make up              Start local dev stack
 make down            Stop all services
+make pi-up           Start Pi services
+make pi-down         Stop Pi services
+make pi-logs         Tail Pi service logs
 make train           Train the bird classifier
 make export          Export model to .mar archive
 make test            Run unit tests with coverage
@@ -224,7 +255,7 @@ make e2e-web         Launch E2E web UI against live services
 | Streaming | FFmpeg, Nginx, HLS, Tailscale Funnel |
 | Camera | Reolink RLC-811A (PoE, 4K, RTSP) |
 | Deployment | Docker Compose, Raspberry Pi 5 |
+| Cloud (future) | AWS: ECS Fargate, S3, Kinesis, SageMaker, RDS |
+| Infrastructure | Terraform |
 | CI/CD | GitHub Actions |
-| Infrastructure | Terraform (AWS: ECS, S3, Kinesis, SageMaker) |
-| Observability | Prometheus, Grafana |
 | Testing | pytest, E2E web UI tool |

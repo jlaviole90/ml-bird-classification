@@ -1,12 +1,9 @@
-"""Elasticsearch-backed search and analytics endpoints."""
+"""Search and analytics endpoints backed by PostgreSQL."""
 
 from __future__ import annotations
 
-import os
-
-from elasticsearch import AsyncElasticsearch
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import cast, func, or_, select, String
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from catalog.api.db import get_db
@@ -14,45 +11,53 @@ from catalog.api.models.detection import DetectionORM
 
 router = APIRouter(prefix="/api/v1", tags=["search"])
 
-ES_URL = os.environ.get("ELASTICSEARCH_URL", "http://localhost:9200")
-ES_INDEX = "bird-detections"
-
-
-def _get_es() -> AsyncElasticsearch:
-    return AsyncElasticsearch(ES_URL)
-
 
 @router.get("/search")
 async def search_detections(
     q: str = Query(..., min_length=1, description="Search query"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Full-text search across species names, metadata, and camera sources."""
-    es = _get_es()
-    try:
-        body = {
-            "query": {
-                "multi_match": {
-                    "query": q,
-                    "fields": ["species^3", "source", "metadata.*"],
-                    "fuzziness": "AUTO",
-                }
-            },
-            "from": (page - 1) * page_size,
-            "size": page_size,
-            "sort": [{"detected_at": {"order": "desc"}}],
-        }
-        result = await es.search(index=ES_INDEX, body=body)
-        hits = result["hits"]
-        return {
-            "total": hits["total"]["value"],
-            "items": [hit["_source"] for hit in hits["hits"]],
-            "page": page,
-            "page_size": page_size,
-        }
-    finally:
-        await es.close()
+    """Search detections by species name, validation notes, or metadata."""
+    like = f"%{q}%"
+    filters = or_(
+        DetectionORM.validation_notes.ilike(like),
+        cast(DetectionORM.extra_metadata, String).ilike(like),
+    )
+
+    count_stmt = select(func.count(DetectionORM.id)).where(filters)
+    total = (await db.execute(count_stmt)).scalar_one()
+
+    stmt = (
+        select(DetectionORM)
+        .where(filters)
+        .order_by(DetectionORM.detected_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    result = await db.execute(stmt)
+    detections = result.scalars().all()
+
+    items = []
+    for d in detections:
+        meta = d.extra_metadata or {}
+        items.append({
+            "detection_id": str(d.id),
+            "species": meta.get("common_name", ""),
+            "species_code": meta.get("species_code", ""),
+            "confidence": d.confidence,
+            "detected_at": d.detected_at.isoformat() if d.detected_at else None,
+            "ebird_validated": d.ebird_validated,
+            "validation_notes": d.validation_notes,
+        })
+
+    return {
+        "total": total,
+        "items": items,
+        "page": page,
+        "page_size": page_size,
+    }
 
 
 @router.get("/analytics/summary")
